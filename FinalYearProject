@@ -1,0 +1,1037 @@
+#include <SD.h>
+#include <SPI.h>
+#include <TimeLib.h>
+#include <LiquidCrystal.h>
+#include <Ethernet2.h>
+#include <EthernetUdp2.h>
+#include <PubSubClient.h>
+#include <EthernetClient.h>
+
+
+byte mac[] = {0x90, 0xA2, 0xDA, 0x0F, 0xF6, 0x18}; // Ethernet shield MAC address
+
+const int chipSelect = 4;
+
+//Adafurit MQTT information
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  1883
+#define AIO_USERNAME    "djiang09" //AIO username
+#define AIO_KEY         "6afdff6743e94baaa562b347c24d3f48" //AIO key
+#define MQTT_CONN_KEEPALIVE 300 //300seconds 
+
+// NTP Servers
+IPAddress timeServer(132, 163, 4, 101); // time-a.timefreq.bldrdoc.gov
+
+const int timeZone = 0;     // Central European Time
+
+EthernetUDP Udp; // A UDP instance to let us send and receive packets over UDP
+unsigned int localPort = 8888;       // local port to listen for UDP packets
+
+int Seconds = 0;       //system runtime
+int Minutes = 0;       //system runtime
+int Hours = 0;         //system runtime
+int Days = 0;          //system runtime
+
+int Error = 0;         //DHCP on/off
+long previousTime = 0; //used for NTP
+
+// When the bluetooth serial data comes in, it will be stored in the following strings variables.
+String Light = " ";
+String Humidity = " ";
+String Temperature = " ";
+String Moist = " ";
+String Fire = " ";
+
+//Bluetooth String variables will be stored here after getting converted to int for the program to perform calculations.
+int Light2 = 0;
+int Humidity2 = 0;
+int Temperature2 = 0;
+int Moist2 = 0;
+int Fire2 = 0;
+
+// reading from MQTT
+int Target_temp = 0;
+int Target_humi = 0;
+int Target_moist = 0;
+int Target_light = 0;
+
+// Manual control
+float targetvalT = 0;
+float targetvalH = 0;
+float targetvalM = 0;
+float targetvalL = 0;
+
+int Switchread = 0; // switch counter
+
+int Error_DHCP = 0; // DHCP status
+
+int noNTP = 0; // NTP status
+
+const int buzzPin = 8; // Buzzer
+//LEDs
+const int led1 = 49;
+const int led2 = 47;
+const int led3 = 53;
+const int led4 = 45;
+const int led5 = 43;
+const int led6 = 41;
+
+// Manuall controll switch
+const int man1 = 39; // Manual override heat
+const int man2 = 37; // Manual override humidifier
+const int man3 = 35; // Manual override sprinkler
+const int man4 = 33; // Manual override light
+
+const int man5 = 31; // switch to lock the potentiometer value
+
+const int access = 27; // access control
+
+const int options = 25; //SD or MQTT
+
+const int pot = 8; // potentiometer for manual override
+
+int counter = 0; // Frist counter used for system runtime
+int counter2 = 0; // Second counter for MQTT
+int counter3 = 0; // theird counter for NTP retry timer
+int commacount = 0; // Used for Bluetooth serial communication
+int fullstopcount = 0; // Used for Bluetooth serial communication
+int starcount = 0; // Used for Bluetooth serial communication
+
+int mqttconnect = 0; // MQTT connection status
+
+int stringcount = 0; //SD data log
+int stringcount2 = 0; //SD data log time
+int stringcount3 = 0; //SD dara log date
+
+int sdsensor = 0; // Sensor data to SD card
+int sdtime = 0; // time to SD card
+int sddate = 0; // date to SD card
+
+int Day = 0; //SD card time stamp
+int Month = 0; //SD card time stamp
+int Year = 0; //SD card time stamp
+
+String dataString = ""; // SD card sensory data
+String timeString = ""; // SD card time
+String dateString = ""; // SD card date
+
+int SDcardstate = 0; // SD card detection
+
+int firestatus = 0; // ignor, function abandoned
+
+char V2sec[10];
+char V2min[10];
+char V2hou[10];
+char V2day[10];
+
+// SD card function or MQTT function switch
+int sdfunc = 0;
+int mqttfunc = 0;
+
+LiquidCrystal lcd(7, 6, 5, 4, 3, 2); //LCD display
+
+//Set up the ethernet client (MQTT)
+EthernetClient ethernet_client;
+PubSubClient client(ethernet_client);
+
+void setup()
+{
+  // All 8 pins is used for 4 pin switch x2.
+  pinMode (A0, INPUT);
+  pinMode (A1, INPUT);
+  pinMode (A2, INPUT);
+  pinMode (A3, INPUT);
+  pinMode (A4, INPUT);
+  pinMode (A5, INPUT);
+  pinMode (A6, INPUT);
+  pinMode (A7, INPUT);
+
+  pinMode (buzzPin, OUTPUT);
+  pinMode (led1, OUTPUT);
+  pinMode (led2, OUTPUT);
+  pinMode (led3, OUTPUT);
+  pinMode (led4, OUTPUT);
+  pinMode (led5, OUTPUT);
+  pinMode (led6, OUTPUT);
+
+  digitalWrite (buzzPin, LOW);
+  digitalWrite (led1, LOW);
+  digitalWrite (led2, LOW);
+  digitalWrite (led3, LOW);
+  digitalWrite (led4, LOW);
+  digitalWrite (led5, LOW);
+  digitalWrite (led6, LOW);
+
+  pinMode (man1, INPUT);
+  pinMode (man2, INPUT);
+  pinMode (man3, INPUT);
+  pinMode (man4, INPUT);
+  pinMode (man5, INPUT);
+
+  pinMode (options, INPUT);
+
+  digitalWrite (A0, HIGH);
+  digitalWrite (A1, HIGH);
+  digitalWrite (A2, HIGH);
+  digitalWrite (A3, HIGH);
+  digitalWrite (A4, HIGH);
+  digitalWrite (A5, HIGH);
+  digitalWrite (A6, HIGH);
+  digitalWrite (A7, HIGH);
+
+  digitalWrite (man1, HIGH);
+  digitalWrite (man2, HIGH);
+  digitalWrite (man3, HIGH);
+  digitalWrite (man4, HIGH);
+
+  //Starting & clearing LCD.
+  lcd.begin(16, 2);
+  lcd.clear();
+
+  delay(250);
+
+  Serial.begin(9600); // Open serial communications and wait for port to open:
+
+
+
+
+  if (Ethernet.begin(mac) == 0)
+  {
+    Serial.println("Failed to configure Ethernet using DHCP");
+    Error_DHCP = 1;
+    lcd.setCursor(0, 0);
+    lcd.print("Config Ethernet");
+    lcd.setCursor(0, 1);
+    lcd.print("Failed");
+    delay (1000);
+  }
+
+  lcd.setCursor(0, 0);
+  lcd.print("Config Ethernet");
+  lcd.setCursor(0, 1);
+  lcd.print("Using DHCP");
+  delay(1000);
+
+  Serial.print("IP number assigned by DHCP is ");
+  Serial.println(Ethernet.localIP());
+  Udp.begin(localPort);
+  Serial.println("waiting for sync");
+  delay(500);
+  setSyncProvider(getNtpTime);
+  delay(500);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Config Bluetooth");
+
+  Serial3.begin(115200);// The Bluetooth Mate defaults to 115200bps
+  delay(350);
+  Serial3.print("$$$");//command mode
+  delay(100);
+  Serial3.println("SM,0");//Slave mode
+  //delay(100);
+  //Serial3.println("U,9600,N");// Temporarily Change the baudrate to 9600, no parity
+  //115200 can be too fast at times for NewSoftSerial to relay the data reliably
+  //Serial3.begin(9600);// Start bluetooth serial at 9600
+  delay(500);
+  //Serial3.println("---");//exit command mode
+  //Serial3.println("$$$");
+  //delay(100);
+  Serial3.println("C,0006666A5C22");
+  delay(3000);
+  Serial3.println("---");
+
+  client.setServer("io.adafruit.com", 1883); // set MQTT server
+  client.setCallback(callback);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Detecting SDCard");
+
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    lcd.setCursor(0, 1);
+    lcd.print("SDcard NotFound");
+    SDcardstate = 0;
+  }
+  else
+  {
+    Serial.println("card initialized.");
+    lcd.setCursor(0, 1);
+    lcd.print("SDcard Detected");
+    SDcardstate = 1;
+  }
+
+  if (digitalRead(options) == HIGH)
+  {
+    sdfunc = 1;
+    mqttfunc = 0;
+  }
+  else
+  {
+    sdfunc = 0;
+    mqttfunc = 1;
+  }
+
+  delay(2000);
+  lcd.clear();
+}
+
+
+time_t prevDisplay = 0; // when the digital clock was displayed
+
+//////////////////// START LOOP ////////////////////
+void loop()
+{
+  int TempF = Temperature2 * 1.8 + 32;
+
+  digitalWrite (buzzPin, LOW);
+  digitalWrite (led1, LOW);
+  digitalWrite (led2, LOW);
+  digitalWrite (led3, LOW);
+  digitalWrite (led4, LOW);
+  digitalWrite (led5, LOW);
+  digitalWrite (led6, LOW);
+
+  if (Error_DHCP == 0 && mqttfunc == 1)
+  {
+    reconnect();
+  }
+  counter += 250; // Counter 1, run every 1 seconds
+  counter2 += 250; // Counter 2, run every 5 seconds
+  counter3 += 250; // Counter 3, run every 50 seconds
+  if (counter == 1000)
+  {
+    SystemUpTime();
+    digitalClockDisplay();
+    if (counter2 == 5000)
+    {
+      char buffer[2];
+      dtostrf(Temperature2, 2, 0, buffer);
+      client.publish("djiang09/f/temp", buffer);
+
+      dtostrf(Light2, 2, 0, buffer);
+      client.publish("djiang09/f/light", buffer);
+
+      dtostrf(Moist2, 2, 0, buffer);
+      client.publish("djiang09/f/moist", buffer);
+
+      dtostrf(Humidity2, 2, 0, buffer);
+      client.publish("djiang09/f/humi", buffer);
+
+      client.loop();
+
+      //Serial.println("Message sent");
+      counter2 = 0;
+      if (SDcardstate == 1 && sdfunc == 1)
+      {
+        digitalWrite (led2, HIGH);
+        sdcard ();
+      }
+
+      buffer[2] = "";
+    }
+    counter = 0;
+  }
+  if (digitalRead(access) == HIGH)
+  {
+    if (digitalRead(A0) == HIGH && digitalRead(A1) == HIGH && digitalRead(A2) == HIGH && digitalRead(A3) == HIGH)
+    {
+      lcd.setCursor(0, 0);
+      lcd.print("System Online!");
+      lcd.setCursor(0, 1);
+      if (sdfunc == 1 && mqttfunc == 0)
+      {
+        lcd.print("SD:ON | MQTT:OFF");
+      }
+      else
+      {
+        lcd.print("SD:OFF | MQTT:ON");
+      }
+    }
+    if (digitalRead(A0) == LOW)
+    {
+      Switchread ++;
+      lcd.clear();
+      if (noNTP == 1)
+      {
+        lcd.setCursor(0, 0);
+        lcd.print("NTP time Offline");
+        lcd.setCursor(0, 1);
+        lcd.print("re-try in 10 sec");
+        if (counter3 == 50000)
+        {
+          getNtpTime();
+        }
+      }
+      else
+      {
+        LCD_Clock();
+      }
+      Errorcheck();
+    }
+    if (digitalRead(A1) == LOW)
+    {
+      Switchread ++;
+      lcd.setCursor(0, 0);
+      lcd.print("Light:");
+      lcd.print(Light2);
+
+      lcd.setCursor(0, 1);
+      lcd.print("C:");
+      lcd.print(Temperature2);
+      lcd.print(" ");
+      lcd.print("F:");
+      lcd.print(TempF);
+      Errorcheck();
+    }
+
+    if (digitalRead(A2) == LOW)
+    {
+      Switchread ++;
+      lcd.setCursor(0, 0);
+      lcd.print("Humi:");
+      lcd.print(Humidity2);
+
+      lcd.setCursor(0, 1);
+      lcd.print("Moisture:");
+      lcd.print(Moist2);
+      Errorcheck();
+    }
+
+    if (digitalRead(A3) == LOW)
+    {
+      Switchread ++;
+      LCD_Uptime();
+      lcd.setCursor(0, 1);
+
+      Errorcheck();
+    }
+
+    if (digitalRead(A4) == LOW)
+    {
+      if (Temperature2 < Target_temp)
+      {
+        digitalWrite (led1, HIGH);
+      }
+    }
+
+    if (digitalRead(A5) == LOW)
+    {
+      if (Humidity2 < Target_humi)
+      {
+        digitalWrite (led4, HIGH);
+      }
+    }
+
+    if (digitalRead(A6) == LOW)
+    {
+      if (Moist2 < Target_moist)
+      {
+        digitalWrite (led5, HIGH);
+      }
+    }
+
+    if (digitalRead(A7) == LOW)
+    {
+      if (Light2 < Target_light)
+      {
+        digitalWrite (led6, HIGH);
+      }
+    }
+
+    if (digitalRead(man1) == LOW)
+    {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Manual: Temp");
+      lcd.setCursor(0, 1);
+      lcd.print("Target:");
+      lcd.print(targetvalT);
+
+      if (digitalRead(man5) == LOW)
+      {
+        targetvalT = analogRead(pot) / 1020.0 * 35;
+      }
+
+      if (Temperature2 < targetvalT)
+      {
+        digitalWrite (led1, HIGH);
+      }
+    }
+
+    if (digitalRead(man2) == LOW)
+    {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Manual: Humi");
+      lcd.setCursor(0, 1);
+      lcd.print("Target:");
+      lcd.print(targetvalH);
+
+      if (digitalRead(man5) == LOW)
+      {
+        targetvalH = analogRead(pot) / 1020.0 * 100;
+      }
+
+      if (Humidity2 < targetvalH)
+      {
+        digitalWrite (led4, HIGH);
+      }
+    }
+
+    if (digitalRead(man3) == LOW)
+    {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Manual: Moist");
+      lcd.setCursor(0, 1);
+      lcd.print("Target:");
+      lcd.print(targetvalM);
+
+      if (digitalRead(man5) == LOW)
+      {
+        targetvalM = analogRead(pot) / 1020.0 * 100;
+      }
+
+      if (Moist2 < targetvalM)
+      {
+        digitalWrite (led5, HIGH);
+      }
+    }
+
+    if (digitalRead(man4) == LOW)
+    {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Manual: Light");
+      lcd.setCursor(0, 1);
+      lcd.print("Target:");
+      lcd.print(targetvalL);
+
+      if (digitalRead(man5) == LOW)
+      {
+        targetvalL = analogRead(pot) / 1020.0 * 100;
+      }
+
+      if (Light2 < targetvalL)
+      {
+        digitalWrite (led6, HIGH);
+      }
+    }
+  }
+  else
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Access Control");
+    lcd.setCursor(0, 1);
+    lcd.print("Provide ID");
+  }
+
+  if (timeStatus() != timeNotSet)
+  {
+    if (now() != prevDisplay) //update the display only if time has changed
+    {
+      prevDisplay = now();
+      //digitalClockDisplay();
+    }
+  }
+  Switchread = 0;
+
+  if (digitalRead(led1) == HIGH || digitalRead(led2) == HIGH || digitalRead(led4) == HIGH || digitalRead(led5) == HIGH || digitalRead(led6) == HIGH )
+  {
+    digitalWrite (buzzPin, HIGH);
+  }
+
+  delay(250);
+  Bluetooth();
+  lcd.clear();
+}
+////////////////////END LOOP////////////////////
+
+void SystemUpTime()
+{
+  Seconds ++;
+
+  if (Seconds == 60)
+  {
+    Seconds = 0;
+    Minutes ++;
+  }
+  if (Minutes == 60)
+  {
+    Minutes = 0;
+    Hours ++;
+  }
+
+  if (Hours == 24)
+  {
+    Days++;
+  }
+
+  Serial.print("UP time ");
+  Serial.print(Days);
+  Serial.print(":");
+  Serial.print(Hours);
+  Serial.print(":");
+  Serial.print(Minutes);
+  Serial.print(":");
+  Serial.println(Seconds);
+
+}
+
+void LCD_Clock()///////////////////////Clock
+{
+
+  lcd.setCursor(0, 0);
+  int H = hour();
+  int M = minute();
+  int S = second();
+  int WD = weekday();
+
+  lcd.print("Time ");
+  if (H < 10)
+  {
+    lcd.print("0");
+  }
+  lcd.print(H);
+  lcd.print(":");
+  if (M < 10)
+  {
+    lcd.print("0");
+  }
+  lcd.print(M);
+  lcd.print(":");
+  if (S < 10)
+  {
+    lcd.print("0");
+  }
+  lcd.print(S);
+
+  lcd.setCursor(0, 1);
+  if (WD == 7)
+  {
+    lcd.print("Sat ");
+  }
+  if (WD == 1)
+  {
+    lcd.print("Sun ");
+  }
+  if (WD == 2)
+  {
+    lcd.print("Mon ");
+  }
+  if (WD == 3)
+  {
+    lcd.print("Tue ");
+  }
+  if (WD == 4)
+  {
+    lcd.print("Wen ");
+  }
+  if (WD == 5)
+  {
+    lcd.print("Thu ");
+  }
+  if (WD == 6)
+  {
+    lcd.print("Fri ");
+  }
+
+  lcd.print(day());
+  lcd.print("/");
+  lcd.print(month());
+  lcd.print("/");
+  lcd.print(year());
+}
+
+void LCD_Uptime()///////////////////////System up time
+{
+  sprintf(V2hou, "%i", Hours);
+  sprintf(V2min, "%i", Minutes);
+  sprintf(V2sec, "%i", Seconds);
+  sprintf(V2day, "%i", Days);
+
+  lcd.setCursor(0, 0);
+  lcd.print("RunTime ");
+  lcd.print(V2day);
+  lcd.print(" ");
+  if (Days < 1)
+  {
+    lcd.print("Day");
+  }
+  else
+  {
+    lcd.print("Days");
+  }
+
+  lcd.setCursor(0, 1);
+
+  if (Hours < 10)
+  {
+    lcd.print("0");
+  }
+  lcd.print(V2hou);
+  lcd.print(" H ");
+  if (Minutes < 10)
+  {
+    lcd.print("0");
+  }
+  lcd.print(V2min);
+  lcd.print(" M");
+
+  //  lcd.print(":");
+  //  if (Seconds < 10)
+  //  {
+  //    lcd.print("0");
+  //  }
+  //lcd.print(V2sec);
+}
+
+void digitalClockDisplay() // digital clock display of the time
+{
+  Day = day();
+  Month = month();
+  Year = year();
+  Serial.print(Day);
+  Serial.print("/");
+  Serial.print(Month);
+  Serial.print("/");
+  Serial.print(Year);
+  Serial.print(" ");
+  Serial.print(hour());
+  Serial.print(":");
+  Serial.print(minute());
+  Serial.print(":");
+  Serial.println(second());
+}
+
+void printDigits(int digits) {
+  // utility for digital clock display: prints preceding colon and leading 0
+  Serial.print(":");
+  if (digits < 10)
+    Serial.print('0');
+  Serial.print(digits);
+}
+
+const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
+byte packetBuffer[ NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
+
+time_t getNtpTime()
+{
+  while (Udp.parsePacket() > 0) ; // discard any previously received packets
+  Serial.println("Transmit NTP Request");
+  sendNTPpacket(timeServer);
+  uint32_t beginWait = millis();
+  while (millis() - beginWait < 1500) {
+    noNTP = 0;
+    int size = Udp.parsePacket();
+    if (size >= NTP_PACKET_SIZE) {
+      Serial.println("Receive NTP Response");
+      Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
+      unsigned long secsSince1900;
+      // convert four bytes starting at location 40 to a long integer
+      secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
+      secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
+      secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
+      secsSince1900 |= (unsigned long)packetBuffer[43];
+      return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
+    }
+  }
+  Serial.println("No NTP Response :-(");
+  noNTP = 1;
+}
+
+// send an NTP request to the time server at the given address
+void sendNTPpacket(IPAddress & address)
+{
+  Serial.println("NTP Packet sent");
+  // set all bytes in the buffer to 0
+  memset(packetBuffer, 0, NTP_PACKET_SIZE);
+  // Initialize values needed to form NTP request
+  // (see URL above for details on the packets)
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;     // Stratum, or type of clock
+  packetBuffer[2] = 6;     // Polling Interval
+  packetBuffer[3] = 0xEC;  // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  packetBuffer[12]  = 49;
+  packetBuffer[13]  = 0x4E;
+  packetBuffer[14]  = 49;
+  packetBuffer[15]  = 52;
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp:
+  Udp.beginPacket(address, 123); //NTP requests are to port 123
+  Udp.write(packetBuffer, NTP_PACKET_SIZE);
+  Udp.endPacket();
+}
+
+void Errorcheck()
+{
+  if (Switchread >= 2)
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Error 1 switch");
+    lcd.setCursor(0, 1);
+    lcd.print("At a time");
+  }
+}
+
+void Bluetooth()
+{
+  if (Serial3.available())
+  {
+    char buf = Serial3.read();
+    //Serial.println(buf);
+    if (buf == '*' && fullstopcount == 1)
+    {
+      if (starcount == 1)
+      {
+        starcount = 0;
+      }
+      starcount ++;
+      fullstopcount = 0;
+    }
+
+    if (buf == ',' && starcount == 1 && fullstopcount == 0)
+    {
+      commacount++ ;
+      if (commacount == 6)
+      {
+        commacount = 0;
+        digitalWrite (led3, HIGH);
+
+        //Serial.print("Light:");
+        Serial.print(Light2);
+        Serial.print(",");
+        //Serial.print("Humidity:");
+        Serial.print(Humidity2);
+        Serial.print(",");
+        //Serial.print("Temperature:");
+        Serial.print(Temperature2);
+        Serial.print(",");
+        //Serial.print("Moist:");
+        Serial.print(Moist2);
+        Serial.print(",");
+        //Serial.print("Fire:");
+        Serial.print(Fire2);
+        Serial.println(",");
+
+        Light2 = Light.toInt();
+        Humidity2 = Humidity.toInt();
+        Temperature2 = Temperature.toInt();
+        Moist2 = Moist.toInt();
+        Fire2 = Fire.toInt();
+
+        Light = " ";
+        Humidity = " ";
+        Temperature = " ";
+        Moist = " ";
+        Fire = " ";
+      }
+    }
+    else
+    {
+      if (commacount == 1)
+      {
+        Light += buf;
+      }
+      else if (commacount == 2)
+      {
+        Humidity += buf;
+      }
+      else if (commacount == 3)
+      {
+        Temperature += buf;
+      }
+      else if (commacount == 4)
+      {
+        Moist += buf;
+      }
+      else if (commacount == 5)
+      {
+        Fire += buf;
+      }
+    }
+    if (buf == '.')
+    {
+      fullstopcount ++;
+    }
+  }
+}
+
+//reconnect to server
+void reconnect()
+{
+  //loop until we are connected
+  while (!client.connected())
+  {
+    Serial.println("attempting mqtt connection...");
+
+    //attempt to connect
+    if (client.connect("djiang09", "djiang09", "6afdff6743e94baaa562b347c24d3f48"))
+    {
+      Serial.println("... connected");
+
+      //once connected, publish an announcement...
+      client.publish("djiang09/f/status", "System Online");
+
+      //and resubscribe to specific topics
+      client.subscribe("djiang09/f/target-temp");
+      client.subscribe("djiang09/f/target-light");
+      client.subscribe("djiang09/f/target-moisture");
+      client.subscribe("djiang09/f/target-humidity");
+    }
+    else
+    {
+      //print some error status
+      Serial.print("failed, rc = ");
+      Serial.print(client.state());
+      Serial.println(" trying again in 5 seconds");
+
+      //wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void callback(char* topic, byte* payload, unsigned int length)
+{
+  String t = String(topic);
+
+  //get the value of the message
+  char data[length + 1];
+  for (int i = 0; i < length; i++)
+  {
+    data[i] = payload[i];
+  }
+  data[length] = '\0';
+
+  //print the message
+  //  Serial.print("message arrived [");
+  //  Serial.print(topic);
+  //  Serial.print("] ");
+  //  Serial.println(data);
+
+  if (t.indexOf("target-temp") >= 0)
+  {
+    Target_temp = atoi(data);
+  }
+
+  if (t.indexOf("target-humidity") >= 0)
+  {
+    Target_humi = atoi(data);
+  }
+
+  if (t.indexOf("target-moisture") >= 0)
+  {
+    Target_moist = atoi(data);
+  }
+
+  if (t.indexOf("target-light") >= 0)
+  {
+    Target_light = atoi(data);
+  }
+}
+
+void sdcard ()
+{
+  dataString = "";
+  timeString = "";
+  dateString = "";
+
+  for (stringcount3 = 0; stringcount3 < 3; stringcount3++)
+  {
+    if (stringcount3 == 0)
+    {
+      sddate = Day;
+    }
+    else if (stringcount3 == 1)
+    {
+      sddate = Month;
+    }
+    else if (stringcount3 == 2)
+    {
+      sddate = Year;
+    }
+
+    dateString += String (sddate);
+    if (stringcount3 < 2)
+    {
+      dateString += "/";
+    }
+  }
+
+  for (stringcount2 = 0; stringcount2 < 3; stringcount2++)
+  {
+    if (stringcount2 == 0)
+    {
+      sdtime = hour();
+    }
+    else if (stringcount2 == 1)
+    {
+      sdtime = minute();
+    }
+    else if (stringcount2 == 2)
+    {
+      sdtime = second();
+    }
+
+    timeString += String (sdtime);
+    if (stringcount2 < 2)
+    {
+      timeString += ":";
+    }
+  }
+
+  for (stringcount = 0; stringcount < 5; stringcount++)
+  {
+    if (stringcount == 0)
+    {
+      sdsensor = Light2;
+    }
+    else if (stringcount == 1)
+    {
+      sdsensor = Humidity2;
+    }
+    else if (stringcount == 2)
+    {
+      sdsensor = Temperature2;
+    }
+    else if (stringcount == 3)
+    {
+      sdsensor = Moist2;
+    }
+    else if (stringcount == 4)
+    {
+      sdsensor = Fire2;
+    }
+    dataString += String (sdsensor);
+    if (stringcount < 4)
+    {
+      dataString += ",";
+    }
+  }
+
+  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+  // if the file is available, write to it
+
+  if (dataFile) {
+    dataFile.print(dateString);
+    dataFile.print(" ");
+    dataFile.print(timeString);
+    dataFile.print(" ");
+    dataFile.println(dataString);
+    dataFile.close();
+    Serial.println("Data input to SDcard");
+    //Serial.println(dataString);
+    //Serial.println(timeString);
+
+  }
+  // if the file isn't open, pop up an error:
+  else {
+    Serial.println("error opening datalog.txt");
+  }
+}
